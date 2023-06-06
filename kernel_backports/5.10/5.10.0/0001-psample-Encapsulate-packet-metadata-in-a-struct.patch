@@ -21,34 +21,11 @@ Signed-off-by: David S. Miller <davem@davemloft.net>
  net/sched/act_sample.c                         | 16 ++++++----------
  4 files changed, 23 insertions(+), 21 deletions(-)
 
-From 07e1a5809b595df6e125504dff6245cb2c8ed3de Mon Sep 17 00:00:00 2001
-From: Ido Schimmel <idosch@nvidia.com>
-Date: Sun, 14 Mar 2021 14:19:31 +0200
-Subject: [PATCH] psample: Add additional metadata attributes
-
-Extend psample to report the following attributes when available:
-
-* Output traffic class as a 16-bit value
-* Output traffic class occupancy in bytes as a 64-bit value
-* End-to-end latency of the packet in nanoseconds resolution
-* Software timestamp in nanoseconds resolution (always available)
-* Packet's protocol. Needed for packet dissection in user space (always
-  available)
-
-Signed-off-by: Ido Schimmel <idosch@nvidia.com>
-Reviewed-by: Jiri Pirko <jiri@nvidia.com>
-Signed-off-by: David S. Miller <davem@davemloft.net>
----
- include/net/psample.h        |  7 +++++++
- include/uapi/linux/psample.h |  7 +++++++
- net/psample/psample.c        | 39 ++++++++++++++++++++++++++++++++++++++-
- 3 files changed, 52 insertions(+), 1 deletion(-)
-
 diff --git a/drivers/net/ethernet/mellanox/mlxsw/spectrum.c b/drivers/net/ethernet/mellanox/mlxsw/spectrum.c
-index b08853f..c209b43 100644
+index 93b15b8c007e6d..3b15f8d728a37e 100644
 --- a/drivers/net/ethernet/mellanox/mlxsw/spectrum.c
 +++ b/drivers/net/ethernet/mellanox/mlxsw/spectrum.c
-@@ -2162,7 +2162,7 @@ void mlxsw_sp_sample_receive(struct mlxsw_sp *mlxsw_sp, struct sk_buff *skb,
+@@ -2217,7 +2217,7 @@ void mlxsw_sp_sample_receive(struct mlxsw_sp *mlxsw_sp, struct sk_buff *skb,
  {
  	struct mlxsw_sp_port *mlxsw_sp_port = mlxsw_sp->ports[local_port];
  	struct mlxsw_sp_port_sample *sample;
@@ -57,14 +34,13 @@ index b08853f..c209b43 100644
  
  	if (unlikely(!mlxsw_sp_port)) {
  		dev_warn_ratelimited(mlxsw_sp->bus_info->dev, "Port %d: sample skb received for non-existent port\n",
-@@ -2174,9 +2174,10 @@ void mlxsw_sp_sample_receive(struct mlxsw_sp *mlxsw_sp, struct sk_buff *skb,
+@@ -2229,9 +2229,9 @@ void mlxsw_sp_sample_receive(struct mlxsw_sp *mlxsw_sp, struct sk_buff *skb,
  	sample = rcu_dereference(mlxsw_sp_port->sample);
  	if (!sample)
  		goto out_unlock;
 -	size = sample->truncate ? sample->trunc_size : skb->len;
 -	psample_sample_packet(sample->psample_group, skb, size,
 -			      mlxsw_sp_port->dev->ifindex, 0, sample->rate);
-+
 +	md.trunc_size = sample->truncate ? sample->trunc_size : skb->len;
 +	md.in_ifindex = mlxsw_sp_port->dev->ifindex;
 +	psample_sample_packet(sample->psample_group, skb, sample->rate, &md);
@@ -72,32 +48,23 @@ index b08853f..c209b43 100644
  	rcu_read_unlock();
  out:
 diff --git a/include/net/psample.h b/include/net/psample.h
-index 68ae16b..1ab0403 100644
+index 68ae16bb0a4a85..ac6dbfb3870d94 100644
 --- a/include/net/psample.h
 +++ b/include/net/psample.h
-@@ -14,6 +14,21 @@ struct psample_group {
+@@ -14,6 +14,12 @@ struct psample_group {
  	struct rcu_head rcu;
  };
  
-+#define PSAMPLE_MD_EXTENDED_ATTR   1
-+
 +struct psample_metadata {
 +	u32 trunc_size;
 +	int in_ifindex;
 +	int out_ifindex;
-+	u16 out_tc;
-+	u64 out_tc_occ; /* bytes */
-+	u64 latency;    /* nanoseconds */
-+	u8 out_tc_valid:1,
-+	   out_tc_occ_valid:1,
-+	   latency_valid:1,
-+	   unused:5;
 +};
 +
  struct psample_group *psample_group_get(struct net *net, u32 group_num);
  void psample_group_take(struct psample_group *group);
  void psample_group_put(struct psample_group *group);
-@@ -21,15 +36,13 @@ void psample_group_put(struct psample_group *group);
+@@ -21,15 +27,13 @@ void psample_group_put(struct psample_group *group);
  #if IS_ENABLED(CONFIG_PSAMPLE)
  
  void psample_sample_packet(struct psample_group *group, struct sk_buff *skb,
@@ -116,108 +83,26 @@ index 68ae16b..1ab0403 100644
  {
  }
  
-diff --git a/include/uapi/linux/psample.h b/include/uapi/linux/psample.h
-index aea26ab..17f3a39 100644
---- a/include/uapi/linux/psample.h
-+++ b/include/uapi/linux/psample.h
-@@ -16,6 +16,13 @@ enum {
- 	/* commands attributes */
- 	PSAMPLE_ATTR_GROUP_REFCOUNT,
- 
-+	PSAMPLE_ATTR_PAD,
-+	PSAMPLE_ATTR_OUT_TC,        /* u16 */
-+	PSAMPLE_ATTR_OUT_TC_OCC,    /* u64, bytes */
-+	PSAMPLE_ATTR_LATENCY,       /* u64, nanoseconds */
-+	PSAMPLE_ATTR_TIMESTAMP,     /* u64, nanoseconds */
-+	PSAMPLE_ATTR_PROTO,     	/* u16 */
-+
- 	__PSAMPLE_ATTR_MAX
- };
- 
 diff --git a/net/psample/psample.c b/net/psample/psample.c
-index 33e238c..9f15cd6 100644
+index 482c07f2766b18..065bc887d23936 100644
 --- a/net/psample/psample.c
 +++ b/net/psample/psample.c
-@@ -8,6 +8,7 @@
- #include <linux/kernel.h>
- #include <linux/skbuff.h>
- #include <linux/module.h>
-+#include <linux/timekeeping.h>
- #include <net/net_namespace.h>
- #include <net/sock.h>
- #include <net/netlink.h>
-@@ -356,8 +357,7 @@ static int psample_tunnel_meta_len(struct ip_tunnel_info *tun_info)
+@@ -356,9 +356,11 @@ static int psample_tunnel_meta_len(struct ip_tunnel_info *tun_info)
  #endif
  
  void psample_sample_packet(struct psample_group *group, struct sk_buff *skb,
 -			   u32 trunc_size, int in_ifindex, int out_ifindex,
 -			   u32 sample_rate)
-+						   u32 sample_rate, const struct psample_metadata *md)
++			   u32 sample_rate, const struct psample_metadata *md)
  {
- #ifdef CONFIG_INET
- 	struct ip_tunnel_info *tun_info;
-@@ -367,13 +367,22 @@ void psample_sample_packet(struct psample_group *group, struct sk_buff *skb,
- 	int meta_len;
- 	void *data;
- 	int ret;
-+	ktime_t tstamp = ktime_get_real();
 +	int out_ifindex = md->out_ifindex;
 +	int in_ifindex = md->in_ifindex;
 +	u32 trunc_size = md->trunc_size;
- 
- 	meta_len = (in_ifindex ? nla_total_size(sizeof(u16)) : 0) +
- 		   (out_ifindex ? nla_total_size(sizeof(u16)) : 0) +
-+		   (md->out_tc_valid ? nla_total_size(sizeof(u16)) : 0) +
-+		   (md->out_tc_occ_valid ? nla_total_size_64bit(sizeof(u64)) : 0) +
-+		   (md->latency_valid ? nla_total_size_64bit(sizeof(u64)) : 0) +
- 		   nla_total_size(sizeof(u32)) +	/* sample_rate */
- 		   nla_total_size(sizeof(u32)) +	/* orig_size */
- 		   nla_total_size(sizeof(u32)) +	/* group_num */
- 		   nla_total_size(sizeof(u32));		/* seq */
-+		   nla_total_size_64bit(sizeof(u64)) + /* timestamp */
-+		   nla_total_size(sizeof(u16));        /* protocol */
- 
  #ifdef CONFIG_INET
- 	tun_info = skb_tunnel_info(skb);
-@@ -423,6 +432,36 @@ void psample_sample_packet(struct psample_group *group, struct sk_buff *skb,
- 	if (unlikely(ret < 0))
- 		goto error;
- 
-+	if (md->out_tc_valid) {
-+		ret = nla_put_u16(nl_skb, PSAMPLE_ATTR_OUT_TC, md->out_tc);
-+		if (unlikely(ret < 0))
-+		goto error;
-+	}
-+
-+	if (md->out_tc_occ_valid) {
-+		ret = nla_put_u64_64bit(nl_skb, PSAMPLE_ATTR_OUT_TC_OCC,
-+								md->out_tc_occ, PSAMPLE_ATTR_PAD);
-+		if (unlikely(ret < 0))
-+			goto error;
-+	}
-+
-+	if (md->latency_valid) {
-+		ret = nla_put_u64_64bit(nl_skb, PSAMPLE_ATTR_LATENCY,
-+								md->latency, PSAMPLE_ATTR_PAD);
-+		if (unlikely(ret < 0))
-+			goto error;
-+	}
-+
-+	ret = nla_put_u64_64bit(nl_skb, PSAMPLE_ATTR_TIMESTAMP,
-+							ktime_to_ns(tstamp), PSAMPLE_ATTR_PAD);
-+	if (unlikely(ret < 0))
-+		goto error;
-+
-+	ret = nla_put_u16(nl_skb, PSAMPLE_ATTR_PROTO,
-+					  be16_to_cpu(skb->protocol));
-+	if (unlikely(ret < 0))
-+		goto error;
-+
- 	if (data_len) {
- 		int nla_len = nla_total_size(data_len);
- 		struct nlattr *nla;
+ 	struct ip_tunnel_info *tun_info;
+ #endif
 diff --git a/net/sched/act_sample.c b/net/sched/act_sample.c
-index 3ebf9ed..2fece01 100644
+index db8ee9e5c8c229..6a0c16e4351d71 100644
 --- a/net/sched/act_sample.c
 +++ b/net/sched/act_sample.c
 @@ -158,10 +158,8 @@ static int tcf_sample_act(struct sk_buff *skb, const struct tc_action *a,
